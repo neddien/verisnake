@@ -1,81 +1,116 @@
 module verisnake (
-    input   wire          clk,
-    input   wire          rst,
-    input   wire [4:0]    ctl,
-    output  wire [7:0]    score,
-    output  wire [7:0]    r_data,
-    output  reg  [2:0]    c_addr 
+    input  logic          clk,
+    input  logic          rst,
+    input  logic [4:0]    ctl,
+    output logic [7:0]    score,
+    output logic [7:0]    r_data,
+    output logic [2:0]    c_addr 
 );
     parameter MOVE_DIV = 16'd50;
 
-    reg [4:0] sn_head_pos_x_;
-    reg [4:0] sn_head_pos_y_;
-    reg [4:0] sn_speed_;
-    reg [7:0] score_;
-    reg [4:0] ap_pos_x_;
-    reg [4:0] ap_pos_y_;
-    reg [7:0] fb_ [7:0];
-    reg [15:0] move_cnt_;
-    reg [5:0] sn_dir_;
-    reg [7:0] data_;
-    integer i, j;
+    typedef enum logic [4:0] {
+        NONE    = 5'h00,
+        UP      = 5'h02, 
+        DOWN    = 5'h08, 
+        LEFT    = 5'h04,
+        RIGHT   = 5'h10
+    } dir_t;
 
-    initial begin
-        sn_head_pos_x_  = 8 / 2;
-        sn_head_pos_y_  = 8 / 2;
-        sn_speed_       = 1;
-        score_          = 0;
-        ap_pos_x_       = 2;
-        ap_pos_y_       = 2;
-        c_addr          = 0;
-        move_cnt_       = 0;
-        sn_dir_         = 5'h04;
-        data_           = 8'h00;
+    typedef enum logic [2:0] {
+        FLOOR,
+        WALL,
+        SNAKE,
+        SEGMENT,
+        APPLE   
+    } cell_t;
 
-        for (i = 0; i < 8; i = i + 1)
-            fb_[i] = 8'h00;
-    end
+    logic [4:0]     sn_head_pos_x_  = 5'd4;
+    logic [4:0]     sn_head_pos_y_  = 5'd4;
+    logic [4:0]     sn_speed_       = 5'd1;
+    logic [7:0]     score_          = 8'd0;
+    logic [4:0]     ap_pos_x_       = 5'd2;
+    logic [4:0]     ap_pos_y_       = 5'd2;
+    logic [15:0]    move_cnt_       = '0;
+    logic [2:0]     col_            = '0;
+    dir_t           sn_dir_         = LEFT;
+    cell_t          scene_[8][8];
+    logic [23:0]    blink_cnt_;
+    logic           blink_;
+
+    dir_t dir_next_;
 
     // Assign to data pin
     assign score    = score_;
+    assign c_addr   = col_;
+    assign blink_   = blink_cnt_[23];
 
-    genvar r;
-    generate 
-        for (r = 0; r < 8; r = r + 1) begin : col_slice
-            assign r_data[r] = fb_[r][7 - c_addr];
-        end
-    endgenerate
+    function automatic logic pixel_on(cell_t e, logic blink);
+        case(e)
+            FLOOR:      return 1'b0;
+            APPLE:      return blink;
+            default:    return 1'b1;
+        endcase
+    endfunction
+
+    // Column output
+    always_comb begin
+        for (int r = 0; r < 8; r++) 
+            r_data[r] = pixel_on(scene_[r][c_addr], blink_);
+    end
+
+    always_comb begin
+        dir_next_ = sn_dir_;
+        case (ctl)
+            UP, DOWN, LEFT, RIGHT: dir_next_ = dir_t'(ctl);
+            default: ;
+        endcase
+    end
 
     // Game logic
-    always @(posedge clk) begin
-        if (move_cnt_ == MOVE_DIV - 1) begin
-            move_cnt_ <= 0;
+    always_ff @(posedge clk) begin
+        blink_cnt_ <= blink_cnt_ + 1;
+        col_ <= col_ + 1;
 
-            if (ctl) sn_dir_ = ctl;
+        if (move_cnt_ == MOVE_DIV - 1) begin
+            move_cnt_   <= '0;
+            sn_dir_     <= dir_next_; 
+
+            // Clear
+            scene_[sn_head_pos_y_][sn_head_pos_x_] = FLOOR;
 
             case (sn_dir_)
-            5'h02: sn_head_pos_y_ <= sn_head_pos_y_ - 1; 
-            5'h08: sn_head_pos_y_ <= sn_head_pos_y_ + 1; 
-            5'h04: sn_head_pos_x_ <= sn_head_pos_x_ + 1;
-            5'h10: sn_head_pos_x_ <= sn_head_pos_x_ - 1;
+                UP:     sn_head_pos_y_ <= sn_head_pos_y_ - 1; 
+                DOWN:   sn_head_pos_y_ <= sn_head_pos_y_ + 1; 
+                LEFT:   sn_head_pos_x_ <= sn_head_pos_x_ - 1;
+                RIGHT:  sn_head_pos_x_ <= sn_head_pos_x_ + 1;
+                default: ;
             endcase
+
+            // New pos
         end else begin
             move_cnt_ <= move_cnt_ + 1;
         end
     end
 
-    // Render
-    always @(posedge clk) begin
-        if (rst)
-            c_addr <= 3'd0;
-        else 
-            c_addr <= c_addr + 1;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            for (int i = 0; i < 8; i++) 
+                for (int j = 0; j < 8; j++)
+                    scene_[i][j] <= FLOOR;
+                
+            sn_head_pos_x_  = 5'd4;
+            sn_head_pos_y_  = 5'd4;
+            sn_speed_       = 5'd1;
+            score_          = 8'd0;
+            ap_pos_x_       = 5'd2;
+            ap_pos_y_       = 5'd2;
+            move_cnt_       = '0;
+            col_            = '0;
+            sn_dir_         = LEFT;
+            blink_cnt_      = '0;
+        end
 
-        for (i = 0; i < 8; i = i + 1) begin
-            fb_[i] <= 8'h00;
-        end 
-
-        fb_[sn_head_pos_y_] <= fb_[sn_head_pos_y_] | (8'h01 << sn_head_pos_x_); 
+        scene_[sn_head_pos_y_][sn_head_pos_x_] = SNAKE;
     end
 
 endmodule
